@@ -1,0 +1,169 @@
+# =============================================================================
+# Jenkins Configuration as Code (JCasC)
+# =============================================================================
+# This file defines the entire Jenkins server configuration.
+# Jenkins chết → dựng lại y hệt bằng file này.
+#
+# Docs: https://www.jenkins.io/projects/jcasc/
+# =============================================================================
+
+jenkins:
+  systemMessage: "Jenkins CI/CD - Do Cao Hieu | Managed by JCasC"
+  numExecutors: 2
+  mode: NORMAL
+  quietPeriod: 5
+
+  # Security
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "${JENKINS_ADMIN_USER:-admin}"
+          password: "${JENKINS_ADMIN_PASSWORD}"
+
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+  # CSRF Protection
+  crumbIssuer:
+    standard:
+      excludeClientIPFromCrumb: false
+
+  # K8s Cloud — Ephemeral Agents
+  clouds:
+    - kubernetes:
+        name: "k3s"
+        serverUrl: "https://rancher.example.com/k8s/clusters/local"
+        skipTlsVerify: true
+        namespace: "jenkins"
+        jenkinsUrl: "http://10.10.0.3:8082/"
+        jenkinsTunnel: "10.10.0.3:50000"
+        # Max concurrent builds on K8s
+        containerCap: 10
+        connectTimeout: 300
+        readTimeout: 300
+
+        templates:
+          # --- Node.js Agent ---
+          - name: "node"
+            label: "node"
+            serviceAccount: "jenkins"
+            nodeUsageMode: NORMAL
+            containers:
+              - name: "jnlp"
+                image: "jenkins/inbound-agent:latest"
+                workingDir: "/home/jenkins/agent"
+                resourceRequestCpu: "500m"
+                resourceRequestMemory: "512Mi"
+              - name: "node"
+                image: "node:20-slim"
+                command: "sleep"
+                args: "infinity"
+                workingDir: "/home/jenkins/agent"
+                resourceRequestCpu: "500m"
+                resourceRequestMemory: "1Gi"
+            yamlMergeStrategy: "override"
+
+          # --- Java/Maven Agent ---
+          - name: "java"
+            label: "java maven"
+            serviceAccount: "jenkins"
+            nodeUsageMode: NORMAL
+            containers:
+              - name: "jnlp"
+                image: "jenkins/inbound-agent:latest"
+                workingDir: "/home/jenkins/agent"
+              - name: "maven"
+                image: "maven:3.9-eclipse-temurin-21"
+                command: "sleep"
+                args: "infinity"
+                workingDir: "/home/jenkins/agent"
+                resourceRequestCpu: "500m"
+                resourceRequestMemory: "1Gi"
+
+          # --- Python Agent ---
+          - name: "python"
+            label: "python"
+            serviceAccount: "jenkins"
+            nodeUsageMode: NORMAL
+            containers:
+              - name: "jnlp"
+                image: "jenkins/inbound-agent:latest"
+                workingDir: "/home/jenkins/agent"
+              - name: "python"
+                image: "python:3.12-slim"
+                command: "sleep"
+                args: "infinity"
+                workingDir: "/home/jenkins/agent"
+                resourceRequestCpu: "500m"
+                resourceRequestMemory: "512Mi"
+
+          # --- Go Agent ---
+          - name: "go"
+            label: "go golang"
+            serviceAccount: "jenkins"
+            nodeUsageMode: NORMAL
+            containers:
+              - name: "jnlp"
+                image: "jenkins/inbound-agent:latest"
+                workingDir: "/home/jenkins/agent"
+              - name: "go"
+                image: "golang:1.23"
+                command: "sleep"
+                args: "infinity"
+                workingDir: "/home/jenkins/agent"
+                resourceRequestCpu: "500m"
+                resourceRequestMemory: "512Mi"
+
+          # --- Docker Agent (for docker build) ---
+          - name: "docker"
+            label: "docker"
+            serviceAccount: "jenkins"
+            nodeUsageMode: NORMAL
+            containers:
+              - name: "jnlp"
+                image: "jenkins/inbound-agent:latest"
+                workingDir: "/home/jenkins/agent"
+              - name: "docker"
+                image: "docker:dind"
+                privileged: true
+                workingDir: "/home/jenkins/agent"
+                resourceRequestCpu: "500m"
+                resourceRequestMemory: "1Gi"
+
+  # JNLP Agent port
+  slaveAgentPort: 50000
+
+# Credentials
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              id: "gitlab-creds"
+              scope: GLOBAL
+              description: "GitLab git.example.com"
+              username: "hieudc"
+              password: "${GITLAB_PASSWORD}"
+
+# Location
+unclassified:
+  location:
+    url: "https://jenkins.example.com/"
+    adminAddress: "docaohieu2808@gmail.com"
+
+  # Shared Library
+  globalLibraries:
+    libraries:
+      - name: "auto-pipeline"
+        defaultVersion: "master"
+        implicit: false
+        allowVersionOverride: true
+        includeInChangesets: false
+        retriever:
+          modernSCM:
+            scm:
+              gitSource:
+                remote: "https://git.example.com/cicd-auto-pipeline/jenkins-shared-library.git"
+                credentialsId: "gitlab-creds"

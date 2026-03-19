@@ -1,0 +1,166 @@
+# =============================================================================
+# Jenkins CI/CD Production Docker Compose
+# =============================================================================
+# This configuration runs Jenkins with:
+# - Jenkins Controller (LTS with JDK 21)
+# - Docker-in-Docker support for building container images
+# - Traefik reverse proxy integration
+# - Persistent data storage
+#
+# Server: 203.0.113.15 (Server-2 - DevOps Tools)
+# Domain: jenkins.example.com
+# Port: 8082
+# =============================================================================
+
+name: jenkins
+
+services:
+  # ===========================================================================
+  # Docker Socket Proxy
+  # ===========================================================================
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy
+    container_name: jenkins-socket-proxy
+    restart: always
+    environment:
+      - CONTAINERS=1
+      - IMAGES=1
+      - NETWORKS=1
+      - POST=1 # Jenkins needs to create containers
+      - BUILD=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - jenkins-internal
+
+  # ===========================================================================
+  # Jenkins Controller
+  # ===========================================================================
+  jenkins:
+    image: jenkins/jenkins:${JENKINS_VERSION:-lts-jdk21}
+    container_name: jenkins
+    restart: always
+    user: root
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Java Options - includes reverse proxy settings
+      # -Djenkins.model.Jenkins.crumbIssuerProxyCompatibility=true : Fix CRUMB with reverse proxy
+      # -Dhudson.security.csrf.DefaultCrumbIssuer.EXCLUDE_SESSION_ID=true : Exclude session from crumb
+      - JAVA_OPTS=${JAVA_OPTS:--Xmx2g -Xms512m -Djava.awt.headless=true -Dhudson.model.DirectoryBrowserSupport.CSP="sandbox allow-scripts; default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'" -Djenkins.install.runSetupWizard=true -Dorg.apache.commons.jelly.tags.fmt.timeZone=Asia/Ho_Chi_Minh -Djenkins.model.Jenkins.crumbIssuerProxyCompatibility=true -Dhudson.security.csrf.DefaultCrumbIssuer.EXCLUDE_SESSION_ID=true}
+
+      # Jenkins Options - forwardedproto fix
+      - JENKINS_OPTS=${JENKINS_OPTS:---httpPort=8080 --prefix=/}
+
+      # Jenkins URL - CRITICAL for reverse proxy
+      - JENKINS_URL=https://${JENKINS_HOST:-jenkins.example.com}/
+
+      # Timezone
+      - TZ=${TZ:-Asia/Ho_Chi_Minh}
+
+      # Docker Host (via socket proxy)
+      - DOCKER_HOST=tcp://jenkins-socket-proxy:2375
+
+      # Disable analytics
+      - JENKINS_UC_INSECURE=false
+
+      # JCasC - Configuration as Code
+      - CASC_JENKINS_CONFIG=/var/jenkins_home/casc.yaml
+
+      # K8s kubeconfig
+      - KUBECONFIG=/var/jenkins_home/k3s-kubeconfig.yaml
+
+      # GitLab credentials for JCasC
+      - GITLAB_PASSWORD=${GITLAB_PASSWORD}
+    ports:
+      # Expose Jenkins on host port 8082 -> container 8080
+      - "${JENKINS_PORT:-8082}:8080"
+      # JNLP Agent port (for distributed builds)
+      - "${JENKINS_AGENT_PORT:-50000}:50000"
+    volumes:
+      # Jenkins home directory - persistent storage
+      - jenkins_home:/var/jenkins_home
+      # JCasC config file
+      - ./casc.yaml:/var/jenkins_home/casc.yaml:ro
+      # K8s kubeconfig for ephemeral agents
+      - ./k3s-kubeconfig.yaml:/var/jenkins_home/k3s-kubeconfig.yaml:ro
+      - ./k3s-kubeconfig.yaml:/root/.kube/config:ro
+      # Docker CLI (optional - mount if installed on host)
+      - /usr/bin/docker:/usr/bin/docker:ro
+    labels:
+      # Traefik Configuration
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-network"
+
+      # Main Router - HTTP (External LB handles HTTPS)
+      - "traefik.http.routers.jenkins.rule=Host(`${JENKINS_HOST:-jenkins.example.com}`)"
+      - "traefik.http.routers.jenkins.entrypoints=web"
+      - "traefik.http.routers.jenkins.service=jenkins"
+      - "traefik.http.services.jenkins.loadbalancer.server.port=8080"
+
+      # Enable sticky sessions for WebSocket support
+      - "traefik.http.services.jenkins.loadbalancer.sticky.cookie=true"
+      - "traefik.http.services.jenkins.loadbalancer.sticky.cookie.name=jenkins_session"
+      - "traefik.http.services.jenkins.loadbalancer.sticky.cookie.httpOnly=true"
+      - "traefik.http.services.jenkins.loadbalancer.sticky.cookie.secure=true"
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:8080/login || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - traefik-network
+      - jenkins-internal
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '4'
+    #       memory: 4G
+    #     reservations:
+    #       cpus: '1'
+    #       memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+  # ===========================================================================
+  # Jenkins SSH Agent (Optional - for distributed builds)
+  # ===========================================================================
+  # Uncomment if you need SSH agents for distributed builds
+  # agent:
+  #   image: jenkins/ssh-agent:latest-jdk21
+  #   container_name: jenkins-agent
+  #   restart: unless-stopped
+  #   environment:
+  #     - JENKINS_AGENT_SSH_PUBKEY=${JENKINS_AGENT_SSH_PUBKEY}
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   networks:
+  #     - jenkins-internal
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '2'
+  #         memory: 2G
+
+  # =============================================================================
+  # Networks
+  # =============================================================================
+networks:
+  # External network managed by Traefik
+  traefik-network:
+    external: true
+
+  # Internal network for Jenkins services
+  jenkins-internal:
+    driver: bridge
+    name: jenkins-internal
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  jenkins_home:
+    name: jenkins_home
