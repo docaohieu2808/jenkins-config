@@ -4,7 +4,7 @@ Production-ready Jenkins CI/CD server với Docker Compose và Traefik integrati
 
 ## Architecture
 
-- **Server**: 203.0.113.15 (Server-2 - DevOps Tools)
+- **Server**: YOUR_SERVER_IP (Server-2 - DevOps Tools)
 - **Domain**: jenkins.example.com
 - **Port**: 8082 (host) → 8080 (container)
 - **Image**: jenkins/jenkins:lts-jdk21

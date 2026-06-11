@@ -35,10 +35,13 @@ jenkins:
     - kubernetes:
         name: "k3s"
         serverUrl: "https://rancher.example.com/k8s/clusters/local"
+        # WARNING: skipTlsVerify=true exposes controller-to-k8s traffic to MITM.
+        # Production fix: mount the cluster CA cert and set credentialsId to a
+        # certificate credential, then set skipTlsVerify: false.
         skipTlsVerify: true
         namespace: "jenkins"
-        jenkinsUrl: "http://10.10.0.3:8082/"
-        jenkinsTunnel: "10.10.0.3:50000"
+        jenkinsUrl: "http://${JENKINS_WG_IP:-YOUR_WG_IP}:8082/"
+        jenkinsTunnel: "${JENKINS_WG_IP:-YOUR_WG_IP}:50000"
         # Max concurrent builds on K8s
         containerCap: 10
         connectTimeout: 300
