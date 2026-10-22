@@ -1,3 +1,6 @@
 *.log
 k3s-kubeconfig.yaml
 .env
+
+# env backups hold the same secrets as .env
+.env.bak*
