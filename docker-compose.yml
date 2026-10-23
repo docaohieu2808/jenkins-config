@@ -19,7 +19,7 @@ services:
   # Docker Socket Proxy
   # ===========================================================================
   socket-proxy:
-    image: tecnativa/docker-socket-proxy
+    image: tecnativa/docker-socket-proxy:v0.5.0
     container_name: jenkins-socket-proxy
     restart: always
     environment:
@@ -72,10 +72,12 @@ services:
 
       # GitLab credentials for JCasC
       - GITLAB_PASSWORD=${GITLAB_PASSWORD}
+      # Resend SMTP key for JCasC mailer / email-ext
+      - RESEND_SMTP_PASSWORD=${RESEND_SMTP_PASSWORD}
     ports:
-      # Expose Jenkins on host port 8082 -> container 8080
-      - "${JENKINS_PORT:-8082}:8080"
-      # JNLP Agent port (for distributed builds)
+      # Jenkins UI bound to wg0 only — public access via Traefik (jenkins.example.com)
+      - "${JENKINS_BIND_IP:-100.64.0.10}:${JENKINS_PORT:-8082}:8080"
+      # JNLP Agent port (for distributed builds) — stays public for external agents
       - "${JENKINS_AGENT_PORT:-50000}:50000"
     volumes:
       # Jenkins home directory - persistent storage
@@ -85,6 +87,8 @@ services:
       # K8s kubeconfig for ephemeral agents
       - ./k3s-kubeconfig.yaml:/var/jenkins_home/k3s-kubeconfig.yaml:ro
       - ./k3s-kubeconfig.yaml:/root/.kube/config:ro
+      # SSH known hosts for git over SSH (e.g. git.example.com:2424)
+      - ./ssh_known_hosts:/etc/ssh/ssh_known_hosts:ro
       # Docker CLI (optional - mount if installed on host)
       - /usr/bin/docker:/usr/bin/docker:ro
     labels:
@@ -94,9 +98,16 @@ services:
 
       # Main Router - HTTP (External LB handles HTTPS)
       - "traefik.http.routers.jenkins.rule=Host(`${JENKINS_HOST:-jenkins.example.com}`)"
-      - "traefik.http.routers.jenkins.entrypoints=web"
+      - "traefik.http.routers.jenkins.entrypoints=websecure"
+      - "traefik.http.routers.jenkins.tls=true"
+      - "traefik.http.routers.jenkins.tls.certresolver=cf-dns"
       - "traefik.http.routers.jenkins.service=jenkins"
       - "traefik.http.services.jenkins.loadbalancer.server.port=8080"
+      - "traefik.http.routers.jenkins-http.rule=Host(`${JENKINS_HOST:-jenkins.example.com}`)"
+      - "traefik.http.routers.jenkins-http.entrypoints=web"
+      - "traefik.http.routers.jenkins-http.middlewares=jenkins-redirect"
+      - "traefik.http.middlewares.jenkins-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.jenkins-redirect.redirectscheme.permanent=true"
 
       # Enable sticky sessions for WebSocket support
       - "traefik.http.services.jenkins.loadbalancer.sticky.cookie=true"

@@ -27,21 +27,18 @@ jenkins:
 
   # CSRF Protection
   crumbIssuer:
-    standard:
-      excludeClientIPFromCrumb: false
+    # Jenkins 2.5xx+ dropped excludeClientIPFromCrumb; the crumb no longer binds to the client IP
+    standard: {}
 
   # K8s Cloud — Ephemeral Agents
   clouds:
     - kubernetes:
         name: "k3s"
         serverUrl: "https://rancher.example.com/k8s/clusters/local"
-        # WARNING: skipTlsVerify=true exposes controller-to-k8s traffic to MITM.
-        # Production fix: mount the cluster CA cert and set credentialsId to a
-        # certificate credential, then set skipTlsVerify: false.
         skipTlsVerify: true
         namespace: "jenkins"
-        jenkinsUrl: "http://${JENKINS_WG_IP:-YOUR_WG_IP}:8082/"
-        jenkinsTunnel: "${JENKINS_WG_IP:-YOUR_WG_IP}:50000"
+        jenkinsUrl: "http://100.64.0.10:8082/"
+        jenkinsTunnel: "100.64.0.10:50000"
         # Max concurrent builds on K8s
         containerCap: 10
         connectTimeout: 300
@@ -149,12 +146,39 @@ credentials:
               description: "GitLab git.example.com"
               username: "hieudc"
               password: "${GITLAB_PASSWORD}"
+          - usernamePassword:
+              id: "jenkins-gitlab-user-account"
+              scope: GLOBAL
+              description: "GitLab (legacy example-client)"
+              username: "hieudc"
+              password: "${GITLAB_PASSWORD}"
 
 # Location
 unclassified:
   location:
     url: "https://jenkins.example.com/"
-    adminAddress: "docaohieu2808@gmail.com"
+    # Sender of every Jenkins mail — must be on docaohieu.com, the domain verified on Resend
+    adminAddress: "Jenkins <no-reply@docaohieu.com>"
+
+  # Outgoing mail through Resend (sending-only key scoped to docaohieu.com)
+  mailer:
+    smtpHost: "smtp.resend.com"
+    smtpPort: "587"
+    useSsl: false
+    useTls: true
+    charset: "UTF-8"
+    authentication:
+      username: "resend"
+      password: "${RESEND_SMTP_PASSWORD}"
+  email-ext:
+    mailAccount:
+      smtpHost: "smtp.resend.com"
+      smtpPort: "587"
+      useSsl: false
+      useTls: true
+      smtpUsername: "resend"
+      smtpPassword: "${RESEND_SMTP_PASSWORD}"
+    defaultContentType: "text/html"
 
   # Shared Library
   globalLibraries:
