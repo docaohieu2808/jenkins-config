@@ -15,7 +15,7 @@ def check = { boolean ok, String what ->
 // security
 check(jenkins.securityRealm.class.simpleName == 'HudsonPrivateSecurityRealm', 'local security realm')
 check(!jenkins.securityRealm.allowsSignup(), 'sign-up disabled')
-check(jenkins.getUser(System.getenv('JENKINS_ADMIN_USER') ?: 'admin', false, [:]) != null, 'admin user exists')
+check(hudson.model.User.getById(System.getenv('JENKINS_ADMIN_USER') ?: 'admin', false) != null, 'admin user exists')
 check(jenkins.slaveAgentPort == 50000, 'agent port 50000')
 
 // kubernetes cloud
