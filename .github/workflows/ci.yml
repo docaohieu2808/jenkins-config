@@ -54,6 +54,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
       - name: Write .env (random admin password)
         run: ci/make-ci-env.sh
       - name: Build the image and start Jenkins
@@ -97,6 +101,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Create the kind network with a fixed subnet (so the controller can have a fixed address)
+        run: docker network create --subnet 172.30.0.0/16 kind
       - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           cluster_name: kind
@@ -108,8 +118,7 @@ jobs:
             echo "K8S_CA_CERT_B64=$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')"
             cp_ip=$(docker inspect -f '{{ .NetworkSettings.Networks.kind.IPAddress }}' kind-control-plane)
             echo "K8S_SERVER_URL=https://${cp_ip}:6443"
-            subnet=$(docker network inspect kind -f '{{ range .IPAM.Config }}{{ .Subnet }} {{ end }}' | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.' | head -1)
-            jenkins_ip="${subnet%.*.*}.255.200"
+            jenkins_ip=172.30.255.200
             echo "JENKINS_KIND_IP=${jenkins_ip}"
             echo "JENKINS_AGENT_URL=http://${jenkins_ip}:8080/"
             echo "JENKINS_TUNNEL=${jenkins_ip}:50000"
