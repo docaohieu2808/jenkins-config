@@ -1,0 +1,6 @@
+# CI overlay: the test registers the shared library from a Git repo on the controller's own disk,
+# which the Git plugin refuses unless told otherwise. Never use this in a real setup.
+services:
+  jenkins:
+    environment:
+      JAVA_OPTS: -Xmx1g -Djava.awt.headless=true -Djenkins.install.runSetupWizard=false -Dhudson.plugins.git.GitSCM.ALLOW_LOCAL_CHECKOUT=true
