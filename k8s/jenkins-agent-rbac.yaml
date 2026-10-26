@@ -1,0 +1,41 @@
+# What the Jenkins "k8s" cloud needs in the cluster: a namespace, a service account and
+# the minimum rights to run agent pods. Apply once, then mint the token for K8S_TOKEN:
+#   kubectl apply -f k8s/jenkins-agent-rbac.yaml
+#   kubectl -n jenkins create token jenkins --duration=8760h
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jenkins
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins
+  namespace: jenkins
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jenkins-agent
+  namespace: jenkins
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/exec", "pods/log", "pods/portforward"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent
+  namespace: jenkins
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: jenkins-agent
+subjects:
+  - kind: ServiceAccount
+    name: jenkins
+    namespace: jenkins

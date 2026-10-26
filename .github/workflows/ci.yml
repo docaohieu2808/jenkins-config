@@ -1,0 +1,137 @@
+# Proves the setup works, not just that it parses:
+# - lint: yamllint, hadolint, actionlint, compose config, kubeconform on the RBAC manifest;
+# - jcasc: build the image (plugins from plugins.txt), start it, check JCasC applied with no errors,
+#   log in as the admin from the environment, then load the shared library JCasC registered and run it;
+# - k8s-agent: start the same controller next to a kind cluster and run a build on an ephemeral pod
+#   created by the JCasC-defined Kubernetes cloud.
+name: ci
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "41 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: yamllint
+        run: pipx run yamllint==1.38.0 -c .yamllint.yml casc.yaml docker-compose.yml docker-compose.traefik.yml k8s .github
+      - name: hadolint
+        run: docker run --rm -i hadolint/hadolint:v2.15.1 hadolint --failure-threshold warning - < Dockerfile
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          bash <(curl -sSfL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash") "$ACTIONLINT_VERSION"
+          ./actionlint -color
+      - name: shellcheck
+        run: shellcheck ci/*.sh
+      - name: docker compose config
+        run: |
+          cp .env.example .env
+          docker compose config -q
+          JENKINS_HOST=jenkins.example.com docker compose -f docker-compose.yml -f docker-compose.traefik.yml config -q
+      - name: kubeconform (RBAC manifest)
+        env:
+          KUBECONFORM_VERSION: v0.8.0
+        run: |
+          curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | tar xz kubeconform
+          ./kubeconform -strict -summary k8s/jenkins-agent-rbac.yaml
+
+  jcasc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Write .env (random admin password)
+        run: ci/make-ci-env.sh
+      - name: Build the image and start Jenkins
+        run: docker compose up -d --build --wait --wait-timeout 300
+      - name: JCasC reported no errors
+        run: |
+          docker compose logs jenkins > jenkins.log 2>&1
+          grep -n "Configuration as Code" jenkins.log || true
+          if grep -nE "ConfiguratorException|SEVERE|Failed to (load|apply)" jenkins.log; then
+            echo "::error::Jenkins logged configuration errors"; exit 1
+          fi
+      - name: Admin login works, anonymous access is refused
+        run: |
+          set -a; . ./.env; set +a
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/json)" = 403
+          curl -fsS -u "admin:$JENKINS_ADMIN_PASSWORD" http://localhost:8080/whoAmI/api/json | tee whoami.json
+          python3 -c 'import json; d=json.load(open("whoami.json")); assert d["authenticated"] and d["name"]=="admin", d'
+      - name: JCasC state matches casc.yaml
+        run: |
+          set -a; . ./.env; set +a
+          export JENKINS_USER_ID=admin JENKINS_API_TOKEN="$JENKINS_ADMIN_PASSWORD"
+          curl -fsSL -o jenkins-cli.jar http://localhost:8080/jnlpJars/jenkins-cli.jar
+          java -jar jenkins-cli.jar -s http://localhost:8080 groovy = < ci/verify-jcasc.groovy
+      - name: Load the registered shared library and run a step from it
+        run: |
+          set -a; . ./.env; set +a
+          export JENKINS_USER_ID=admin JENKINS_API_TOKEN="$JENKINS_ADMIN_PASSWORD"
+          ci/make-fixture-library.sh
+          ci/run-pipeline.sh http://localhost:8080 library-smoke ci/pipeline-library-smoke.groovy SUCCESS
+      - name: Controller log on failure
+        if: failure()
+        run: docker compose logs --tail 300 jenkins
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  k8s-agent:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          cluster_name: kind
+      - name: Apply RBAC and mint the token the Jenkins cloud will use
+        run: |
+          kubectl apply -f k8s/jenkins-agent-rbac.yaml
+          {
+            echo "K8S_TOKEN=$(kubectl -n jenkins create token jenkins --duration=2h)"
+            echo "K8S_CA_CERT_B64=$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')"
+            cp_ip=$(docker inspect -f '{{ .NetworkSettings.Networks.kind.IPAddress }}' kind-control-plane)
+            echo "K8S_SERVER_URL=https://${cp_ip}:6443"
+            subnet=$(docker network inspect kind -f '{{ range .IPAM.Config }}{{ .Subnet }} {{ end }}' | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.' | head -1)
+            jenkins_ip="${subnet%.*.*}.255.200"
+            echo "JENKINS_KIND_IP=${jenkins_ip}"
+            echo "JENKINS_AGENT_URL=http://${jenkins_ip}:8080/"
+            echo "JENKINS_TUNNEL=${jenkins_ip}:50000"
+          } > k8s.env
+          # Mask the token before it can reach any log.
+          echo "::add-mask::$(grep '^K8S_TOKEN=' k8s.env | cut -d= -f2-)"
+          cat k8s.env >> "$GITHUB_ENV"
+      - name: Write .env and start Jenkins on the kind network
+        run: |
+          ci/make-ci-env.sh
+          docker compose -f docker-compose.yml -f ci/docker-compose.kind.yml up -d --build --wait --wait-timeout 300
+      - name: Run a build on an ephemeral pod from the JCasC cloud
+        run: |
+          set -a; . ./.env; set +a
+          export JENKINS_USER_ID=admin JENKINS_API_TOKEN="$JENKINS_ADMIN_PASSWORD"
+          ci/run-pipeline.sh http://localhost:8080 k8s-agent ci/pipeline-k8s-agent.groovy SUCCESS
+      - name: Pods and controller log on failure
+        if: failure()
+        run: |
+          kubectl -n jenkins get pods -o wide || true
+          kubectl -n jenkins describe pods | tail -80 || true
+          docker compose -f docker-compose.yml -f ci/docker-compose.kind.yml logs --tail 300 jenkins
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f ci/docker-compose.kind.yml down -v

@@ -1,0 +1,11 @@
+# CI overlay: put the controller on kind's Docker network with a fixed address, so the agent pods
+# in the kind cluster can reach it for the web socket and the agent port.
+services:
+  jenkins:
+    networks:
+      default:
+        ipv4_address: ${JENKINS_KIND_IP:?}
+networks:
+  default:
+    name: kind
+    external: true

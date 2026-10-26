@@ -1,0 +1,20 @@
+# Optional overlay: publish Jenkins through an existing Traefik.
+#   docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d --build --wait
+# Needs the external Docker network `traefik-network` and a certificate resolver named `letsencrypt`
+# (rename it below to match your Traefik).
+services:
+  jenkins:
+    networks:
+      - default
+      - traefik-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-network"
+      - "traefik.http.routers.jenkins.rule=Host(`${JENKINS_HOST:?set JENKINS_HOST for the Traefik route}`)"
+      - "traefik.http.routers.jenkins.entrypoints=websecure"
+      - "traefik.http.routers.jenkins.tls.certresolver=letsencrypt"
+      - "traefik.http.services.jenkins.loadbalancer.server.port=8080"
+
+networks:
+  traefik-network:
+    external: true

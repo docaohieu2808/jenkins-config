@@ -1,19 +1,20 @@
 # =============================================================================
 # Jenkins Configuration as Code (JCasC)
 # =============================================================================
-# This file defines the entire Jenkins server configuration.
-# Jenkins chết → dựng lại y hệt bằng file này.
+# The whole controller configuration lives here. It is baked into the image
+# (see Dockerfile), so a new server is `git clone && docker compose up --build`.
+# Every environment-specific value or secret is a ${VARIABLE} that docker compose
+# passes in from .env; nothing sensitive is written in this file.
 #
 # Docs: https://www.jenkins.io/projects/jcasc/
 # =============================================================================
 
 jenkins:
-  systemMessage: "Jenkins CI/CD - Do Cao Hieu | Managed by JCasC"
+  systemMessage: "Jenkins CI/CD | Managed by JCasC"
   numExecutors: 2
   mode: NORMAL
   quietPeriod: 5
 
-  # Security
   securityRealm:
     local:
       allowsSignup: false
@@ -25,55 +26,64 @@ jenkins:
     loggedInUsersCanDoAnything:
       allowAnonymousRead: false
 
-  # CSRF Protection
   crumbIssuer:
-    # Jenkins 2.5xx+ dropped excludeClientIPFromCrumb; the crumb no longer binds to the client IP
     standard: {}
 
-  # K8s Cloud — Ephemeral Agents
+  # Kubernetes cloud: every build runs in a short-lived pod.
   clouds:
     - kubernetes:
-        name: "k3s"
-        serverUrl: "https://rancher.example.com/k8s/clusters/local"
-        skipTlsVerify: true
+        name: "k8s"
+        serverUrl: "${K8S_SERVER_URL}"
+        # Cluster CA (PEM) is passed base64-encoded so it fits on one .env line.
+        serverCertificate: "${decodeBase64:${K8S_CA_CERT_B64}}"
+        skipTlsVerify: false
+        # Bearer token of the service account in the namespace below (credential k8s-token).
+        credentialsId: "k8s-token"
         namespace: "jenkins"
-        jenkinsUrl: "http://100.64.0.10:8082/"
-        jenkinsTunnel: "100.64.0.10:50000"
-        # Max concurrent builds on K8s
+        # Where the agent pods reach this controller.
+        jenkinsUrl: "${JENKINS_AGENT_URL}"
+        jenkinsTunnel: "${JENKINS_TUNNEL}"
         containerCap: 10
         connectTimeout: 300
         readTimeout: 300
 
         templates:
-          # --- Node.js Agent ---
+          # Every pod has a "jnlp" container (the inbound agent) plus one tool container.
           - name: "node"
             label: "node"
             serviceAccount: "jenkins"
             nodeUsageMode: NORMAL
             containers:
               - name: "jnlp"
-                image: "jenkins/inbound-agent:latest"
+                image: "jenkins/inbound-agent:3391.va_37fa_a_305d6d-6-jdk21"
                 workingDir: "/home/jenkins/agent"
-                resourceRequestCpu: "500m"
-                resourceRequestMemory: "512Mi"
+                resourceRequestCpu: "250m"
+                resourceRequestMemory: "256Mi"
+                resourceLimitCpu: "1"
+                resourceLimitMemory: "512Mi"
               - name: "node"
-                image: "node:20-slim"
+                image: "node:24-slim"
                 command: "sleep"
                 args: "infinity"
                 workingDir: "/home/jenkins/agent"
                 resourceRequestCpu: "500m"
                 resourceRequestMemory: "1Gi"
+                resourceLimitCpu: "2"
+                resourceLimitMemory: "2Gi"
             yamlMergeStrategy: "override"
 
-          # --- Java/Maven Agent ---
           - name: "java"
             label: "java maven"
             serviceAccount: "jenkins"
             nodeUsageMode: NORMAL
             containers:
               - name: "jnlp"
-                image: "jenkins/inbound-agent:latest"
+                image: "jenkins/inbound-agent:3391.va_37fa_a_305d6d-6-jdk21"
                 workingDir: "/home/jenkins/agent"
+                resourceRequestCpu: "250m"
+                resourceRequestMemory: "256Mi"
+                resourceLimitCpu: "1"
+                resourceLimitMemory: "512Mi"
               - name: "maven"
                 image: "maven:3.9-eclipse-temurin-21"
                 command: "sleep"
@@ -81,106 +91,121 @@ jenkins:
                 workingDir: "/home/jenkins/agent"
                 resourceRequestCpu: "500m"
                 resourceRequestMemory: "1Gi"
+                resourceLimitCpu: "2"
+                resourceLimitMemory: "3Gi"
 
-          # --- Python Agent ---
           - name: "python"
             label: "python"
             serviceAccount: "jenkins"
             nodeUsageMode: NORMAL
             containers:
               - name: "jnlp"
-                image: "jenkins/inbound-agent:latest"
+                image: "jenkins/inbound-agent:3391.va_37fa_a_305d6d-6-jdk21"
                 workingDir: "/home/jenkins/agent"
+                resourceRequestCpu: "250m"
+                resourceRequestMemory: "256Mi"
+                resourceLimitCpu: "1"
+                resourceLimitMemory: "512Mi"
               - name: "python"
-                image: "python:3.12-slim"
+                image: "python:3.14-slim"
                 command: "sleep"
                 args: "infinity"
                 workingDir: "/home/jenkins/agent"
                 resourceRequestCpu: "500m"
                 resourceRequestMemory: "512Mi"
+                resourceLimitCpu: "2"
+                resourceLimitMemory: "1Gi"
 
-          # --- Go Agent ---
           - name: "go"
             label: "go golang"
             serviceAccount: "jenkins"
             nodeUsageMode: NORMAL
             containers:
               - name: "jnlp"
-                image: "jenkins/inbound-agent:latest"
+                image: "jenkins/inbound-agent:3391.va_37fa_a_305d6d-6-jdk21"
                 workingDir: "/home/jenkins/agent"
+                resourceRequestCpu: "250m"
+                resourceRequestMemory: "256Mi"
+                resourceLimitCpu: "1"
+                resourceLimitMemory: "512Mi"
               - name: "go"
-                image: "golang:1.23"
+                image: "golang:1.26"
                 command: "sleep"
                 args: "infinity"
                 workingDir: "/home/jenkins/agent"
                 resourceRequestCpu: "500m"
                 resourceRequestMemory: "512Mi"
+                resourceLimitCpu: "2"
+                resourceLimitMemory: "2Gi"
 
-          # --- Docker Agent (for docker build) ---
+          # Docker-in-Docker for image builds. privileged is required by dind: run this
+          # template only on a cluster you control, never on a shared one.
           - name: "docker"
             label: "docker"
             serviceAccount: "jenkins"
             nodeUsageMode: NORMAL
             containers:
               - name: "jnlp"
-                image: "jenkins/inbound-agent:latest"
+                image: "jenkins/inbound-agent:3391.va_37fa_a_305d6d-6-jdk21"
                 workingDir: "/home/jenkins/agent"
+                resourceRequestCpu: "250m"
+                resourceRequestMemory: "256Mi"
+                resourceLimitCpu: "1"
+                resourceLimitMemory: "512Mi"
               - name: "docker"
-                image: "docker:dind"
+                image: "docker:29-dind"
                 privileged: true
                 workingDir: "/home/jenkins/agent"
                 resourceRequestCpu: "500m"
                 resourceRequestMemory: "1Gi"
+                resourceLimitCpu: "2"
+                resourceLimitMemory: "3Gi"
 
-  # JNLP Agent port
+  # Port the inbound agents connect to.
   slaveAgentPort: 50000
 
-# Credentials
 credentials:
   system:
     domainCredentials:
       - credentials:
+          - string:
+              id: "k8s-token"
+              scope: GLOBAL
+              description: "Kubernetes service-account token for the k8s cloud"
+              secret: "${K8S_TOKEN}"
           - usernamePassword:
               id: "gitlab-creds"
               scope: GLOBAL
-              description: "GitLab git.example.com"
-              username: "hieudc"
-              password: "${GITLAB_PASSWORD}"
-          - usernamePassword:
-              id: "jenkins-gitlab-user-account"
-              scope: GLOBAL
-              description: "GitLab (legacy example-client)"
-              username: "hieudc"
-              password: "${GITLAB_PASSWORD}"
+              description: "Git server login used to fetch the shared library"
+              username: "${GIT_USERNAME:-ci-bot}"
+              password: "${GIT_PASSWORD:-}"
 
-# Location
 unclassified:
   location:
-    url: "https://jenkins.example.com/"
-    # Sender of every Jenkins mail — must be on docaohieu.com, the domain verified on Resend
-    adminAddress: "Jenkins <no-reply@docaohieu.com>"
+    url: "${JENKINS_PUBLIC_URL:-http://localhost:8080/}"
+    adminAddress: "${JENKINS_ADMIN_ADDRESS:-Jenkins <jenkins@example.com>}"
 
-  # Outgoing mail through Resend (sending-only key scoped to docaohieu.com)
+  # Outgoing mail (defaults to Resend; any SMTP server works).
   mailer:
-    smtpHost: "smtp.resend.com"
-    smtpPort: "587"
+    smtpHost: "${SMTP_HOST:-smtp.resend.com}"
+    smtpPort: "${SMTP_PORT:-587}"
     useSsl: false
     useTls: true
     charset: "UTF-8"
     authentication:
-      username: "resend"
-      password: "${RESEND_SMTP_PASSWORD}"
+      username: "${SMTP_USERNAME:-resend}"
+      password: "${SMTP_PASSWORD:-}"
   email-ext:
     mailAccount:
-      smtpHost: "smtp.resend.com"
-      smtpPort: "587"
+      smtpHost: "${SMTP_HOST:-smtp.resend.com}"
+      smtpPort: "${SMTP_PORT:-587}"
       useSsl: false
       useTls: true
-      smtpUsername: "resend"
-      smtpPassword: "${RESEND_SMTP_PASSWORD}"
+      smtpUsername: "${SMTP_USERNAME:-resend}"
+      smtpPassword: "${SMTP_PASSWORD:-}"
     defaultContentType: "text/html"
 
-  # Shared Library
+  # Shared library: Jenkinsfiles use `@Library('auto-pipeline') _`.
   globalLibraries:
     libraries:
       - name: "auto-pipeline"
@@ -191,6 +216,6 @@ unclassified:
         retriever:
           modernSCM:
             scm:
-              gitSource:
-                remote: "https://git.example.com/cicd-auto-pipeline/jenkins-shared-library.git"
+              git:
+                remote: "${SHARED_LIB_REMOTE}"
                 credentialsId: "gitlab-creds"
