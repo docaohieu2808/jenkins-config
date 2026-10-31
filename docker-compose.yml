@@ -49,3 +49,5 @@ services:
 
 volumes:
   jenkins_home:
+    # Explicit name so an existing controller keeps its data across project renames and upgrades.
+    name: ${JENKINS_HOME_VOLUME:-jenkins_home}
