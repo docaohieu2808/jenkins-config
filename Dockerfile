@@ -1,6 +1,6 @@
 # Jenkins controller, built from code: pinned LTS core + pinned plugins + JCasC baked in.
 # Jenkins LTS 2.580.1 is the current LTS line (updates.jenkins.io, 2026-10-26).
-FROM jenkins/jenkins:2.580.1-lts-jdk21
+FROM jenkins/jenkins:2.580.2-lts-jdk21
 
 # No setup wizard: the admin user and every setting come from casc.yaml.
 ENV JAVA_OPTS="-Xmx2g -Xms512m -Djava.awt.headless=true -Djenkins.install.runSetupWizard=false"
